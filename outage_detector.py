@@ -144,6 +144,8 @@ def cluster_complaints(complaints: list[Complaint]) -> np.ndarray:
         min_cluster_size=3,
         min_samples=2,
         metric="precomputed",
+        cluster_selection_epsilon=0.0,
+        allow_single_cluster=True,
         copy=True,
     )
 
