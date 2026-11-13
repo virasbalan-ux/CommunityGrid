@@ -1,0 +1,15 @@
+# Node.js dependencies
+node_modules/
+
+# Local application data
+bijlimitra_mvp_v2/data/
+
+# Python environments and cache
+.venv/
+__pycache__/
+*.pyc
+
+# Local secrets
+.env
+.env.*
+!.env.example
