@@ -35,6 +35,10 @@ for group, base_lat in [("a", 12.9716), ("b", 13.0716)]:
         payload["residents"].append({
             "id": uid,
             "locality": f"Test Area {group.upper()}",
+            "history": {
+                "confirmed": 8 if group == "a" else 0,
+                "false": 0 if group == "a" else 8,
+            },
         })
 
         payload["reports"].append({

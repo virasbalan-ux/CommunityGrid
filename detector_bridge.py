@@ -79,11 +79,17 @@ def main():
 
         complaints.append(complaint)
 
-    # Neutral trust until verified reporting history is available.
-    users = {
-        complaint.user_id: User()
-        for complaint in complaints
-    }
+    # Only handler-reviewed outcomes contribute to reporting history.
+    users = {}
+
+    for complaint in complaints:
+        resident = residents[complaint.user_id]
+        history = resident.get("history", {})
+
+        users[complaint.user_id] = User(
+            confirmed=history.get("confirmed", 0),
+            false=history.get("false", 0),
+        )
 
     # Count registered residents in each locality.
     locality_counts = {}
@@ -115,7 +121,7 @@ def main():
         "converted_reports": len(complaints),
         "skipped_reports": skipped,
         "noise_reports": noise_count,
-        "trust_mode": "neutral — verified history unavailable",
+        "trust_mode": "handler-reviewed history; neutral for residents without reviews",
         "locality_history_available": False,
         "alerts": alerts,
     }))

@@ -73,6 +73,30 @@ function runDetector(payload) {
         child.stdin.end(JSON.stringify(payload));
     });
 }
+function reportingHistory(d, userId) {
+    const history = {
+        confirmed: 0,
+        false: 0
+    };
+
+    const reportsById = new Map(
+        d.reports.map(report => [report.id, report])
+    );
+
+    for (const review of d.reportReviews || []) {
+        const report = reportsById.get(review.reportId);
+
+        if (!report || report.userId !== userId) continue;
+
+        if (review.outcome === "confirmed") {
+            history.confirmed++;
+        } else if (review.outcome === "false") {
+            history.false++;
+        }
+    }
+
+    return history;
+}
 function buildingId(u) {
     const normalize = value =>
         String(value || "").trim().toLowerCase();
@@ -164,7 +188,51 @@ save(d);s.json({ok:true,affected:q.body.affected,incident:i,yesCount:yes,noCount
 app.post("/api/incidents/:id/home-check",(q,s)=>auth(q,s,()=>{let d=db(),u=current(d,q),i=d.incidents.find(x=>x.id===q.params.id),r=d.reports.find(x=>x.incidentId===q.params.id&&x.kind==="outage");if(!i)return s.status(404).json({error:"Incident not found."});if(!r||r.userId!==u.id)return s.status(403).json({error:"Only the original reporter can complete this check."});if(i.status==="community_confirmed")return s.status(409).json({error:"A neighbour confirmed a wider outage; home check is hidden."});r.checklist={nearbyOut:!!q.body.nearbyOut,breakerTripped:!!q.body.breakerTripped,hazard:!!q.body.hazard,notes:q.body.notes||"",checkedAt:now()};save(d);s.json({ok:true,message:q.body.hazard?"Electrical hazard indicated. Keep away and contact the utility or a qualified electrician.":"Home check saved. You may proceed to lodge an official complaint."})}));
 app.post("/api/incidents/:id/complaint",(q,s)=>auth(q,s,()=>{let d=db(),u=current(d,q),i=d.incidents.find(x=>x.id===q.params.id);if(!i)return s.status(404).json({error:"Incident not found."});if(u.role!=="admin"&&!d.reports.some(r=>r.incidentId===i.id&&r.userId===u.id))return s.status(403).json({error:"Not authorized."});i.provider=q.body.provider||"Not specified";i.complaintReference=q.body.reference||"Pending";i.status="complaint_lodged";i.complaintAt=now();d.complaintLog.push({id:id("cmp"),incidentId:i.id,provider:i.provider,reference:i.complaintReference,createdAt:now()});residents(d,i.groupKey).forEach(x=>notify(d,x.id,"Official complaint recorded",`Provider: ${i.provider}; reference: ${i.complaintReference}`,i.id));save(d);s.json({ok:true,incident:i})}));
 app.post("/api/incidents/:id/restore",(q,s)=>auth(q,s,()=>{let d=db(),u=current(d,q),i=d.incidents.find(x=>x.id===q.params.id);if(!i)return s.status(404).json({error:"Incident not found."});i.restorationConfirmedBy=i.restorationConfirmedBy||[];if(!i.restorationConfirmedBy.includes(u.id))i.restorationConfirmedBy.push(u.id);i.restorationReportedAt=now();if(u.role==="admin"||i.restorationConfirmedBy.length>=2){i.status="restored";i.restoredAt=now()}else i.status="restoration_reported";residents(d,i.groupKey).forEach(x=>notify(d,x.id,"Restoration update","A resident reported power restored. Please confirm if yours is back too.",i.id));save(d);s.json({incident:i})}));
-app.get("/api/admin/overview",(q,s)=>auth(q,s,()=>{let d=db(),u=current(d,q);if(u.role!=="admin")return s.status(403).json({error:"Admin access only."});s.json({incidents:d.incidents,plannedOutages:d.plannedOutages})}));
+app.get("/api/admin/overview", (q, s) => auth(q, s, () => {
+    const d = db();
+    const u = current(d, q);
+
+    if (!u || u.role !== "admin") {
+        return s.status(403).json({error: "Admin access only."});
+    }
+
+    const residentsById = new Map(
+        d.users
+            .filter(resident => resident.role === "resident")
+            .map(resident => [resident.id, resident])
+    );
+
+    const reviewsByReportId = new Map(
+        (d.reportReviews || []).map(review => [
+            review.reportId,
+            review
+        ])
+    );
+
+    const reports = d.reports
+        .filter(report => report.affected === true)
+        .map(report => {
+            const resident = residentsById.get(report.userId);
+            const review = reviewsByReportId.get(report.id);
+
+            return {
+                id: report.id,
+                incidentId: report.incidentId,
+                residentName: resident?.name || "Unknown resident",
+                locality: resident?.locality || "Unknown locality",
+                createdAt: report.createdAt,
+                outcome: review?.outcome || "unreviewed",
+                evidence: review?.evidence || "",
+                history: reportingHistory(d, report.userId)
+            };
+        });
+
+    s.json({
+        incidents: d.incidents,
+        plannedOutages: d.plannedOutages,
+        reports
+    });
+}));
 app.post("/api/admin/planned-outages",(q,s)=>auth(q,s,()=>{let d=db(),u=current(d,q);if(u.role!=="admin")return s.status(403).json({error:"Admin access only."});let b=q.body;if(!b.locality||!b.startAt||!Number(b.durationHours)||Number(b.durationHours)<=0)return s.status(400).json({error:"Enter locality, start time and positive duration."});let p={id:id("plan"),locality:b.locality.trim(),title:b.title||"Planned power outage",startAt:new Date(b.startAt).toISOString(),durationHours:Number(b.durationHours),reason:b.reason||"Not specified",details:b.details||"",createdAt:now()};d.plannedOutages.push(p);let targets=d.users.filter(x=>x.role==="resident"&&(x.locality||"").toLowerCase()===p.locality.toLowerCase());targets.forEach(x=>notify(d,x.id,"Planned outage notice",`${p.title}. Expected start: ${new Date(p.startAt).toLocaleString()}. Expected duration: ${p.durationHours} hour(s). Reason: ${p.reason}. ${p.details}`,null));save(d);s.json({plannedOutage:p,notifiedResidents:targets.length})}));
 app.post("/api/admin/incidents/:id/status",(q,s)=>auth(q,s,()=>{let d=db(),u=current(d,q);if(u.role!=="admin")return s.status(403).json({error:"Admin access only."});let i=d.incidents.find(x=>x.id===q.params.id);if(!i)return s.status(404).json({error:"Incident not found."});i.status=q.body.status;if(i.status==="restored")i.restoredAt=now();residents(d,i.groupKey).forEach(x=>notify(d,x.id,"Outage status updated",`Handler update: ${i.status}`,i.id));save(d);s.json({incident:i})}));
 app.post("/api/notifications/read",(q,s)=>auth(q,s,()=>{let d=db();d.notifications.filter(n=>n.userId===q.session.uid).forEach(n=>n.read=true);save(d);s.json({ok:true})}));
@@ -206,7 +274,8 @@ app.get("/api/admin/detection", (q, s) => auth(q, s, async () => {
         const result = await runDetector({
             residents: residents.map(u => ({
                 id: u.id,
-                locality: u.locality
+                locality: u.locality,
+                history: reportingHistory(d, u.id)
             })),
             reports
         });
@@ -216,5 +285,59 @@ app.get("/api/admin/detection", (q, s) => auth(q, s, async () => {
         console.error(error);
         s.status(500).json({error: "Unable to run outage detection."});
     }
+}));
+app.post("/api/admin/reports/:id/review", (q, s) => auth(q, s, () => {
+    const d = db();
+    const admin = current(d, q);
+
+    if (!admin || admin.role !== "admin") {
+        return s.status(403).json({error: "Admin access only."});
+    }
+
+    const report = d.reports.find(r => r.id === q.params.id);
+
+    if (!report || report.affected !== true) {
+        return s.status(404).json({
+            error: "Positive outage report not found."
+        });
+    }
+
+    const { outcome, evidence } = q.body || {};
+
+    if (!["confirmed", "false", "unreviewed"].includes(outcome)) {
+        return s.status(400).json({error: "Invalid review outcome."});
+    }
+
+    if (
+        outcome !== "unreviewed" &&
+        (typeof evidence !== "string" || !evidence.trim())
+    ) {
+        return s.status(400).json({
+            error: "Describe the evidence supporting this review."
+        });
+    }
+
+    d.reportReviews = d.reportReviews || [];
+
+    // Remove the earlier review, if one exists.
+    d.reportReviews = d.reportReviews.filter(
+        review => review.reportId !== report.id
+    );
+
+    if (outcome !== "unreviewed") {
+        d.reportReviews.push({
+            reportId: report.id,
+            outcome,
+            evidence: evidence.trim(),
+            reviewedBy: admin.id,
+            reviewedAt: now()
+        });
+    }
+
+    save(d);
+    s.json({
+        ok: true,
+        history: reportingHistory(d, report.userId)
+    });
 }));
 app.use(express.static(path.join(__dirname,"public")));app.get("*",(q,s)=>s.sendFile(path.join(__dirname,"public/index.html")));app.listen(PORT,()=>console.log("BijliMitra running at http://localhost:"+PORT));

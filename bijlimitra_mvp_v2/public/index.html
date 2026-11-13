@@ -118,6 +118,35 @@ async function runOutageAnalysis() {
         button.disabled = false;
     }
 }
+async function saveReportReview(reportId) {
+    const outcome = document.getElementById(
+        "reviewOutcome" + reportId
+    ).value;
+
+    const evidence = document.getElementById(
+        "reviewEvidence" + reportId
+    ).value.trim();
+
+    if (outcome !== "unreviewed" && !evidence) {
+        alert("Enter the evidence supporting this review.");
+        return;
+    }
+
+    try {
+        await api(
+            "/api/admin/reports/" + encodeURIComponent(reportId) + "/review",
+            {
+                method: "POST",
+                body: JSON.stringify({ outcome, evidence })
+            }
+        );
+
+        alert("Review saved.");
+        await admin();
+    } catch (error) {
+        alert(error.message);
+    }
+}
 async function admin(){let d=await api("/api/admin/overview");$("#view").innerHTML=`<div class="card"><h2>Handler dashboard</h2><h3>Publish planned outage notification</h3><form id="planned" class="grid"><input name="locality" placeholder="Exact locality name" required><input name="title" placeholder="Notice title" value="Planned power outage"><label>Start date/time<input type="datetime-local" name="startAt" required></label><label>Duration in hours<input type="number" name="durationHours" min="0.5" step="0.5" required></label><input name="reason" placeholder="Reason / maintenance"><textarea name="details" placeholder="Additional details"></textarea><button>Notify locality residents</button></form><p class="muted">Sends in-app notifications to registered residents whose locality matches exactly.</p><h3>Outage analysis</h3>
 <p class="muted">
     Groups reports by distance and time. Results require handler review
@@ -126,7 +155,52 @@ async function admin(){let d=await api("/api/admin/overview");$("#view").innerHT
 <button id="runDetection" onclick="runOutageAnalysis()">
     Run outage analysis
 </button>
-<div id="detectionResults"></div><h3>Reported incidents</h3>${d.incidents.map(i=>`<div class="item"><b>${esc(i.areaLabel)}</b> · ${esc(status(i.status))}<p>${i.reportsCount} reports / ${i.confirmationCount} confirmations</p><input id="provider${i.id}" placeholder="Provider"><input id="ref${i.id}" placeholder="Official complaint reference"><button onclick="adminComplaint('${i.id}')">Save complaint</button><select id="status${i.id}"><option value="reported">Reported</option><option value="community_confirmed">Community confirmed</option><option value="complaint_lodged">Complaint lodged</option><option value="restored">Restored</option><option value="closed">Closed</option></select><button class="secondary" onclick="adminStatus('${i.id}')">Update status</button></div>`).join("")||"No incidents yet."}</div>`;
+<div id="detectionResults"></div><h3>Review individual reports</h3>
+<p class="muted">
+    Confirm whether the resident experienced an outage, including a
+    home or building outage. Mark false only with supporting evidence.
+    Missing neighbour confirmation is not evidence of a false report.
+</p>
+
+${(d.reports || []).map(r => `
+    <div class="item">
+        <b>${esc(r.residentName)}</b> · ${esc(r.locality)}
+        <p>
+            Reported: ${esc(r.createdAt)}
+            · Review: ${esc(r.outcome)}
+        </p>
+        <p>
+            History: ${esc(String(r.history.confirmed))} confirmed,
+            ${esc(String(r.history.false))} false
+        </p>
+
+        <select id="reviewOutcome${esc(r.id)}">
+            <option value="unreviewed"
+                ${r.outcome === "unreviewed" ? "selected" : ""}>
+                Unreviewed
+            </option>
+            <option value="confirmed"
+                ${r.outcome === "confirmed" ? "selected" : ""}>
+                Confirmed outage experience
+            </option>
+            <option value="false"
+                ${r.outcome === "false" ? "selected" : ""}>
+                False report established
+            </option>
+        </select>
+
+        <textarea
+            id="reviewEvidence${esc(r.id)}"
+            placeholder="Evidence supporting your review"
+        >${esc(r.evidence)}</textarea>
+
+        <button
+            data-report-id="${esc(r.id)}"
+            onclick="saveReportReview(this.dataset.reportId)">
+            Save review
+        </button>
+    </div>
+`).join("") || "<p>No positive outage reports to review.</p>"}<h3>Reported incidents</h3>${d.incidents.map(i=>`<div class="item"><b>${esc(i.areaLabel)}</b> · ${esc(status(i.status))}<p>${i.reportsCount} reports / ${i.confirmationCount} confirmations</p><input id="provider${i.id}" placeholder="Provider"><input id="ref${i.id}" placeholder="Official complaint reference"><button onclick="adminComplaint('${i.id}')">Save complaint</button><select id="status${i.id}"><option value="reported">Reported</option><option value="community_confirmed">Community confirmed</option><option value="complaint_lodged">Complaint lodged</option><option value="restored">Restored</option><option value="closed">Closed</option></select><button class="secondary" onclick="adminStatus('${i.id}')">Update status</button></div>`).join("")||"No incidents yet."}</div>`;
 $("#planned").onsubmit=async e=>{e.preventDefault();try{let r=await api("/api/admin/planned-outages",{method:"POST",body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});alert(`Notification sent to ${r.notifiedResidents} resident(s).`);admin()}catch(x){alert(x.message)}}}
 async function adminComplaint(id){try{await api(`/api/incidents/${id}/complaint`,{method:"POST",body:JSON.stringify({provider:$("#provider"+id).value,reference:$("#ref"+id).value})});alert("Saved.");admin()}catch(e){alert(e.message)}}
 async function adminStatus(id){try{await api(`/api/admin/incidents/${id}/status`,{method:"POST",body:JSON.stringify({status:$("#status"+id).value})});alert("Updated.");admin()}catch(e){alert(e.message)}}
