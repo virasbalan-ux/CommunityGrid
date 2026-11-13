@@ -75,7 +75,58 @@ if($("#complaint"))$("#complaint").onsubmit=async e=>{e.preventDefault();try{awa
 }
 async function respond(id,affected){try{let r=await api(`/api/incidents/${id}/respond`,{method:"POST",body:JSON.stringify({affected})});alert(affected?"Response saved. The original reporter will be told a neighbour is also affected.":"Response saved. The original reporter will be prompted to check their home.");go("home")}catch(e){alert(e.message)}}
 async function restore(id){try{await api(`/api/incidents/${id}/restore`,{method:"POST",body:"{}"});alert("Restoration response saved.");go("home")}catch(e){alert(e.message)}}
-async function admin(){let d=await api("/api/admin/overview");$("#view").innerHTML=`<div class="card"><h2>Handler dashboard</h2><h3>Publish planned outage notification</h3><form id="planned" class="grid"><input name="locality" placeholder="Exact locality name" required><input name="title" placeholder="Notice title" value="Planned power outage"><label>Start date/time<input type="datetime-local" name="startAt" required></label><label>Duration in hours<input type="number" name="durationHours" min="0.5" step="0.5" required></label><input name="reason" placeholder="Reason / maintenance"><textarea name="details" placeholder="Additional details"></textarea><button>Notify locality residents</button></form><p class="muted">Sends in-app notifications to registered residents whose locality matches exactly.</p><h3>Reported incidents</h3>${d.incidents.map(i=>`<div class="item"><b>${esc(i.areaLabel)}</b> · ${esc(status(i.status))}<p>${i.reportsCount} reports / ${i.confirmationCount} confirmations</p><input id="provider${i.id}" placeholder="Provider"><input id="ref${i.id}" placeholder="Official complaint reference"><button onclick="adminComplaint('${i.id}')">Save complaint</button><select id="status${i.id}"><option value="reported">Reported</option><option value="community_confirmed">Community confirmed</option><option value="complaint_lodged">Complaint lodged</option><option value="restored">Restored</option><option value="closed">Closed</option></select><button class="secondary" onclick="adminStatus('${i.id}')">Update status</button></div>`).join("")||"No incidents yet."}</div>`;
+async function runOutageAnalysis() {
+    const button = $("#runDetection");
+    const results = $("#detectionResults");
+
+    button.disabled = true;
+    results.textContent = "Analysing reports…";
+
+    try {
+        const d = await api("/api/admin/detection");
+
+        results.innerHTML = `
+            <p>
+                Reports with usable coordinates: ${esc(String(d.converted_reports))}
+                · Skipped: ${esc(String(d.skipped_reports))}
+                · Unclustered recent reports: ${esc(String(d.noise_reports))}
+            </p>
+            <p class="muted">${esc(d.trust_mode)}</p>
+            <p class="muted">
+                Evidence scores are experimental, not outage probabilities.
+                Locality false-report history is not yet available.
+            </p>
+            ${d.alerts.map(a => `
+                <div class="item">
+                    <b>${esc(a.locality)}</b>
+                    <p>${esc(a.scope)}</p>
+                    <p>
+                        ${esc(String(a.complaints))} reports
+                        · Evidence score: ${esc(String(a.evidence_score))}
+                    </p>
+                    <p>
+                        ${a.review_required
+                            ? "Evidence threshold passed — review home, building and wider supply."
+                            : "Below evidence threshold — more evidence needed."}
+                    </p>
+                </div>
+            `).join("") || "<p>No outage clusters detected.</p>"}
+        `;
+    } catch (error) {
+        results.textContent = error.message;
+    } finally {
+        button.disabled = false;
+    }
+}
+async function admin(){let d=await api("/api/admin/overview");$("#view").innerHTML=`<div class="card"><h2>Handler dashboard</h2><h3>Publish planned outage notification</h3><form id="planned" class="grid"><input name="locality" placeholder="Exact locality name" required><input name="title" placeholder="Notice title" value="Planned power outage"><label>Start date/time<input type="datetime-local" name="startAt" required></label><label>Duration in hours<input type="number" name="durationHours" min="0.5" step="0.5" required></label><input name="reason" placeholder="Reason / maintenance"><textarea name="details" placeholder="Additional details"></textarea><button>Notify locality residents</button></form><p class="muted">Sends in-app notifications to registered residents whose locality matches exactly.</p><h3>Outage analysis</h3>
+<p class="muted">
+    Groups reports by distance and time. Results require handler review
+    and do not establish the cause of an outage.
+</p>
+<button id="runDetection" onclick="runOutageAnalysis()">
+    Run outage analysis
+</button>
+<div id="detectionResults"></div><h3>Reported incidents</h3>${d.incidents.map(i=>`<div class="item"><b>${esc(i.areaLabel)}</b> · ${esc(status(i.status))}<p>${i.reportsCount} reports / ${i.confirmationCount} confirmations</p><input id="provider${i.id}" placeholder="Provider"><input id="ref${i.id}" placeholder="Official complaint reference"><button onclick="adminComplaint('${i.id}')">Save complaint</button><select id="status${i.id}"><option value="reported">Reported</option><option value="community_confirmed">Community confirmed</option><option value="complaint_lodged">Complaint lodged</option><option value="restored">Restored</option><option value="closed">Closed</option></select><button class="secondary" onclick="adminStatus('${i.id}')">Update status</button></div>`).join("")||"No incidents yet."}</div>`;
 $("#planned").onsubmit=async e=>{e.preventDefault();try{let r=await api("/api/admin/planned-outages",{method:"POST",body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});alert(`Notification sent to ${r.notifiedResidents} resident(s).`);admin()}catch(x){alert(x.message)}}}
 async function adminComplaint(id){try{await api(`/api/incidents/${id}/complaint`,{method:"POST",body:JSON.stringify({provider:$("#provider"+id).value,reference:$("#ref"+id).value})});alert("Saved.");admin()}catch(e){alert(e.message)}}
 async function adminStatus(id){try{await api(`/api/admin/incidents/${id}/status`,{method:"POST",body:JSON.stringify({status:$("#status"+id).value})});alert("Updated.");admin()}catch(e){alert(e.message)}}
