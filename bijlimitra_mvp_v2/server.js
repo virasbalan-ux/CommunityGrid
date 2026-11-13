@@ -29,9 +29,41 @@ app.get("/api/me",(q,s)=>auth(q,s,()=>s.json({user:safe(current(db(),q))})));
 app.get("/api/dashboard",(q,s)=>auth(q,s,()=>{let d=db(),u=current(d,q),k=group(u),active=d.incidents.filter(i=>i.groupKey===k&&!["restored","closed"].includes(i.status));
 for(let i of active){let own=d.reports.find(r=>r.incidentId===i.id&&r.kind==="outage");let replies=d.reports.filter(r=>r.incidentId===i.id&&r.kind==="neighbor_response");if(own&&own.userId===u.id&&!i.homeCheckPrompted&&i.status!=="community_confirmed"&&Date.now()-Date.parse(i.createdAt)>=5*60000&&replies.length===0)askHomeCheck(d,i)}
 save(d);s.json({user:safe(u),activeIncidents:active,history:d.incidents.filter(i=>i.groupKey===k).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)),reports:d.reports.filter(r=>r.userId===u.id),notifications:d.notifications.filter(n=>n.userId===u.id).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)),plannedOutages:d.plannedOutages.filter(p=>p.locality.toLowerCase()===(u.locality||"").toLowerCase())})}));
-app.post("/api/incidents/report",(q,s)=>auth(q,s,()=>{let d=db(),u=current(d,q);if(u.role!=="resident")return s.status(403).json({error:"Resident account only."});let k=group(u),i=d.incidents.find(x=>x.groupKey===k&&!["restored","closed"].includes(x.status)&&Date.now()-Date.parse(x.createdAt)<86400000),joined=!!i;
+app.post("/api/incidents/report",(q,s)=>auth(q,s,()=>{let d=db(),u=current(d,q);if(u.role!=="resident")return s.status(403).json({error:"Resident account only."});const body = q.body || {};
+const hasLat = body.lat !== undefined;
+const hasLon = body.lon !== undefined;
+
+let location = null;
+
+if (hasLat || hasLon) {
+    if (
+        typeof body.lat !== "number" ||
+        typeof body.lon !== "number" ||
+        !Number.isFinite(body.lat) ||
+        !Number.isFinite(body.lon) ||
+        body.lat < -90 || body.lat > 90 ||
+        body.lon < -180 || body.lon > 180
+    ) {
+        return s.status(400).json({
+            error: "Provide valid numeric latitude and longitude."
+        });
+    }
+
+    location = {
+        lat: body.lat,
+        lon: body.lon
+    };
+}let k=group(u),i=d.incidents.find(x=>x.groupKey===k&&!["restored","closed"].includes(x.status)&&Date.now()-Date.parse(x.createdAt)<86400000),joined=!!i;
 if(!i){i={id:id("inc"),groupKey:k,locality:u.locality,areaLabel:u.housingType==="apartment"?`${u.apartment}, Block ${u.block}`:`${u.locality}, ${u.street}`,status:"reported",createdAt:now(),reportsCount:0,confirmationCount:0,homeCheckPrompted:false,complaintReference:""};d.incidents.push(i);residents(d,k).filter(x=>x.id!==u.id).forEach(x=>notify(d,x.id,"Power outage reported nearby",`${u.name} reported an outage. Are you also affected?`,i.id))}
-if(!d.reports.some(r=>r.incidentId===i.id&&r.userId===u.id)){d.reports.push({id:id("rep"),incidentId:i.id,userId:u.id,kind:"outage",affected:true,createdAt:now()});i.reportsCount++}save(d);s.json({incident:i,joinedExisting:joined})}));
+if(!d.reports.some(r=>r.incidentId===i.id&&r.userId===u.id)){d.reports.push({
+    id: id("rep"),
+    incidentId: i.id,
+    userId: u.id,
+    kind: "outage",
+    affected: true,
+    createdAt: now(),
+    location: location
+});i.reportsCount++}save(d);s.json({incident:i,joinedExisting:joined})}));
 app.post("/api/incidents/:id/respond",(q,s)=>auth(q,s,()=>{let d=db(),u=current(d,q),i=d.incidents.find(x=>x.id===q.params.id);if(!i)return s.status(404).json({error:"Incident not found."});if(u.role!=="resident"||group(u)!==i.groupKey)return s.status(403).json({error:"You are not part of this incident's resident group."});if(typeof q.body.affected!=="boolean")return s.status(400).json({error:"affected must be true or false."});
 let r=d.reports.find(x=>x.incidentId===i.id&&x.userId===u.id);if(!r){r={id:id("rep"),incidentId:i.id,userId:u.id,kind:"neighbor_response",createdAt:now()};d.reports.push(r)}r.kind="neighbor_response";r.affected=q.body.affected;r.respondedAt=now();
 let yes=d.reports.filter(x=>x.incidentId===i.id&&x.kind==="neighbor_response"&&x.affected===true).length,no=d.reports.filter(x=>x.incidentId===i.id&&x.kind==="neighbor_response"&&x.affected===false).length;

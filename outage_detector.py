@@ -300,3 +300,24 @@ different_buildings = [
 print("\nScope checks:")
 print("Same building:", assess_scope(same_building))
 print("Different buildings:", assess_scope(different_buildings))
+# Same locations, but reports arrive in two separate bursts.
+test_reports = []
+
+for prefix, age in [("recent", 1), ("earlier", 25)]:
+    for i in range(5):
+        test_reports.append(
+            Complaint(
+                user_id=f"{prefix}_{i}",
+                lat=12.9716 + i * 0.00001,
+                lon=77.5946,
+                minutes_ago=age + i * 0.1,
+                locality="Test Area",
+                building_id=f"building-{i}",
+            )
+        )
+
+test_labels = cluster_complaints(test_reports)
+
+print("\nTime separation check:")
+print("Recent burst: ", test_labels[:5])
+print("Earlier burst:", test_labels[5:])

@@ -10,7 +10,63 @@ async function load(){cache=await api("/api/dashboard")}
 async function go(p){tab=p;try{if(p==="admin"){await admin();return}await load();if(p==="home")home();else history()}catch(e){$("#view").textContent=e.message}}
 function home(){let d=cache;$("#view").innerHTML=`<div class="card"><h2>Dashboard</h2><p>Locality: ${esc(d.user.locality)}</p><button onclick="report()">Report power outage</button></div><div class="card"><h3>Active incidents</h3>${d.activeIncidents.map(i=>`<div class="item"><b>${esc(i.areaLabel)}</b> <span class="pill">${esc(status(i.status))}</span><p>${i.reportsCount} reports · ${i.confirmationCount} confirmations · ${dt(i.createdAt)}</p><button class="secondary" onclick="detail('${i.id}')">Open</button></div>`).join("")||"No active outages."}</div><div class="card"><h3>Planned outages for your locality</h3>${d.plannedOutages.map(p=>`<div class="item"><b>${esc(p.title)}</b><p>Starts: ${dt(p.startAt)} · Duration: ${p.durationHours} hour(s)</p><p>${esc(p.reason)} ${esc(p.details)}</p></div>`).join("")||"No planned outages."}</div><div class="card"><h3>Notifications</h3>${d.notifications.map(n=>`<div class="item"><b>${esc(n.title)}</b><p>${esc(n.message)}</p><small>${dt(n.createdAt)}</small></div>`).join("")||"No notifications."}<button class="secondary" onclick="api('/api/notifications/read',{method:'POST',body:'{}'}).then(()=>go('home'))">Mark read</button></div>`}
 function history(){let h=cache.history;$("#view").innerHTML=`<div class="card"><h2>Outage history</h2>${h.map(i=>`<div class="item"><b>${esc(i.areaLabel)}</b> · ${esc(status(i.status))}<p>Reported ${dt(i.createdAt)} · Restored ${dt(i.restoredAt)} · Complaint ${esc(i.complaintReference||"—")}</p></div>`).join("")||"No history."}</div>`}
-async function report(){try{let r=await api("/api/incidents/report",{method:"POST",body:"{}"});alert(r.joinedExisting?"Report joined existing incident.":"Reported. Neighbours notified.");go("home")}catch(e){alert(e.message)}}
+async function report() {
+    try {
+        let location = {};
+
+        const useLocation = confirm(
+            "Are you currently at the outage location? " +
+            "Click OK to share your current location, " +
+            "or Cancel to report without coordinates."
+        );
+
+        if (useLocation && navigator.geolocation) {
+            try {
+                const position = await new Promise((resolve, reject) => {
+                    navigator.geolocation.getCurrentPosition(
+                        resolve,
+                        reject,
+                        {
+                            enableHighAccuracy: true,
+                            timeout: 10000,
+                            maximumAge: 0
+                        }
+                    );
+                });
+
+                location = {
+                    lat: position.coords.latitude,
+                    lon: position.coords.longitude
+                };
+            } catch (error) {
+                alert(
+                    "Location unavailable. Your report will still be " +
+                    "submitted without coordinates."
+                );
+            }
+        } else if (useLocation) {
+            alert(
+                "Your browser does not support location access. " +
+                "Your report will be submitted without coordinates."
+            );
+        }
+
+        const r = await api("/api/incidents/report", {
+            method: "POST",
+            body: JSON.stringify(location)
+        });
+
+        alert(
+            r.joinedExisting
+                ? "Report joined existing incident."
+                : "Reported. Neighbours notified."
+        );
+
+        go("home");
+    } catch (error) {
+        alert(error.message);
+    }
+}
 async function detail(id){await load();let i=[...cache.activeIncidents,...cache.history].find(x=>x.id===id);if(!i)return;let original=cache.reports.some(r=>r.incidentId===id&&r.kind==="outage"&&r.userId===me.id),answered=cache.reports.some(r=>r.incidentId===id&&r.kind==="neighbor_response"&&r.userId===me.id);
 let canCheck=original&&i.status!=="community_confirmed"&&(i.homeCheckPrompted||cache.notifications.some(n=>n.incidentId===id&&n.title==="Neighbour response received"));
 $("#view").innerHTML=`<div class="card"><h2>${esc(i.areaLabel)}</h2><p>Status: ${esc(status(i.status))} · ${i.confirmationCount} neighbour confirmations</p><p>Reported ${dt(i.createdAt)}</p>${!original&&!answered&&me.role==="resident"?`<h3>Are you also affected?</h3><button onclick="respond('${id}',true)">Yes</button> <button class="secondary" onclick="respond('${id}',false)">No</button>`:""}${canCheck?`<h3>Home-level check</h3><form id="check"><label><input type="checkbox" name="nearbyOut" style="width:auto"> Nearby houses/streetlights also without power</label><label><input type="checkbox" name="breakerTripped" style="width:auto"> MCB/breaker appears tripped</label><label><input type="checkbox" name="hazard" style="width:auto"> Smoke, sparking, burning smell or exposed wiring</label><textarea name="notes" placeholder="Notes"></textarea><button>Submit home check</button></form><p class="muted">Do not touch wiring, electrical panels or exposed equipment. Keep away from hazards.</p><h3>Official complaint</h3><form id="complaint"><input name="provider" placeholder="Electricity provider"><input name="reference" placeholder="Complaint reference"><button>Save complaint details</button></form>`:""}<button class="secondary" onclick="restore('${id}')">Power restored at my home</button><button class="secondary" onclick="go('home')">Back</button></div>`;
