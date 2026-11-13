@@ -1,5 +1,6 @@
 
 const express=require("express"),session=require("express-session"),bcrypt=require("bcryptjs"),fs=require("fs"),path=require("path"),crypto=require("crypto");
+const { spawn } = require("child_process");
 const app=express(),PORT=3000,DIR=path.join(__dirname,"data"),FILE=path.join(DIR,"db.json");
 fs.mkdirSync(DIR,{recursive:true});
 app.use(express.json());
@@ -15,6 +16,93 @@ function seed(){let users=[
 users.push({id:id("usr"),username:"admin",passwordHash:bcrypt.hashSync("admin123",10),role:"admin",name:"Locality Handler"});
 fs.writeFileSync(FILE,JSON.stringify({users,incidents:[],reports:[],notifications:[],plannedOutages:[],complaintLog:[]},null,2))}
 function group(u){return u.housingType==="apartment"?`apt:${(u.apartment||"").toLowerCase()}|${(u.block||"").toLowerCase()}`:`street:${(u.locality||"").toLowerCase()}|${(u.street||"").toLowerCase()}`}
+function runDetector(payload) {
+    return new Promise((resolve, reject) => {
+        const root = path.resolve(__dirname, "..");
+        const python = process.platform === "win32"
+            ? path.join(root, ".venv", "Scripts", "python.exe")
+            : path.join(root, ".venv", "bin", "python");
+
+        const child = spawn(
+            python,
+            [path.join(root, "detector_bridge.py")],
+            { cwd: root }
+        );
+
+        let output = "";
+        let errors = "";
+
+        const timeout = setTimeout(() => {
+            child.kill();
+            reject(new Error("Outage detection timed out."));
+        }, 30000);
+
+        child.stdout.on("data", chunk => {
+            output += chunk.toString();
+        });
+
+        child.stderr.on("data", chunk => {
+            errors += chunk.toString();
+        });
+
+        child.on("error", error => {
+            clearTimeout(timeout);
+            reject(error);
+        });
+
+        child.stdin.on("error", error => {
+            clearTimeout(timeout);
+            reject(error);
+        });
+
+        child.on("close", code => {
+            clearTimeout(timeout);
+
+            if (code !== 0) {
+                console.error("Detector error:", errors);
+                return reject(new Error("Outage detection failed."));
+            }
+
+            try {
+                resolve(JSON.parse(output));
+            } catch {
+                reject(new Error("Invalid response from detector."));
+            }
+        });
+
+        child.stdin.end(JSON.stringify(payload));
+    });
+}
+function buildingId(u) {
+    const normalize = value =>
+        String(value || "").trim().toLowerCase();
+
+    const locality = normalize(u.locality);
+
+    if (u.housingType === "apartment") {
+        const apartment = normalize(u.apartment);
+        const block = normalize(u.block);
+
+        if (!locality || !apartment || !block) return null;
+
+        return JSON.stringify([
+            "apartment", locality, apartment, block
+        ]);
+    }
+
+    if (u.housingType === "independent") {
+        const street = normalize(u.street);
+        const house = normalize(u.houseNumber);
+
+        if (!locality || !street || !house) return null;
+
+        return JSON.stringify([
+            "house", locality, street, house
+        ]);
+    }
+
+    return null;
+}
 function safe(u){if(!u)return null;let {passwordHash,houseNumber,...x}=u;return x}
 function auth(q,s,n){if(!q.session.uid)return s.status(401).json({error:"Please log in."});n()}
 function current(d,q){return d.users.find(u=>u.id===q.session.uid)}
@@ -62,7 +150,8 @@ if(!d.reports.some(r=>r.incidentId===i.id&&r.userId===u.id)){d.reports.push({
     kind: "outage",
     affected: true,
     createdAt: now(),
-    location: location
+    location: location,
+    building_id: buildingId(u)
 });i.reportsCount++}save(d);s.json({incident:i,joinedExisting:joined})}));
 app.post("/api/incidents/:id/respond",(q,s)=>auth(q,s,()=>{let d=db(),u=current(d,q),i=d.incidents.find(x=>x.id===q.params.id);if(!i)return s.status(404).json({error:"Incident not found."});if(u.role!=="resident"||group(u)!==i.groupKey)return s.status(403).json({error:"You are not part of this incident's resident group."});if(typeof q.body.affected!=="boolean")return s.status(400).json({error:"affected must be true or false."});
 let r=d.reports.find(x=>x.incidentId===i.id&&x.userId===u.id);if(!r){r={id:id("rep"),incidentId:i.id,userId:u.id,kind:"neighbor_response",createdAt:now()};d.reports.push(r)}r.kind="neighbor_response";r.affected=q.body.affected;r.respondedAt=now();
@@ -79,4 +168,53 @@ app.get("/api/admin/overview",(q,s)=>auth(q,s,()=>{let d=db(),u=current(d,q);if(
 app.post("/api/admin/planned-outages",(q,s)=>auth(q,s,()=>{let d=db(),u=current(d,q);if(u.role!=="admin")return s.status(403).json({error:"Admin access only."});let b=q.body;if(!b.locality||!b.startAt||!Number(b.durationHours)||Number(b.durationHours)<=0)return s.status(400).json({error:"Enter locality, start time and positive duration."});let p={id:id("plan"),locality:b.locality.trim(),title:b.title||"Planned power outage",startAt:new Date(b.startAt).toISOString(),durationHours:Number(b.durationHours),reason:b.reason||"Not specified",details:b.details||"",createdAt:now()};d.plannedOutages.push(p);let targets=d.users.filter(x=>x.role==="resident"&&(x.locality||"").toLowerCase()===p.locality.toLowerCase());targets.forEach(x=>notify(d,x.id,"Planned outage notice",`${p.title}. Expected start: ${new Date(p.startAt).toLocaleString()}. Expected duration: ${p.durationHours} hour(s). Reason: ${p.reason}. ${p.details}`,null));save(d);s.json({plannedOutage:p,notifiedResidents:targets.length})}));
 app.post("/api/admin/incidents/:id/status",(q,s)=>auth(q,s,()=>{let d=db(),u=current(d,q);if(u.role!=="admin")return s.status(403).json({error:"Admin access only."});let i=d.incidents.find(x=>x.id===q.params.id);if(!i)return s.status(404).json({error:"Incident not found."});i.status=q.body.status;if(i.status==="restored")i.restoredAt=now();residents(d,i.groupKey).forEach(x=>notify(d,x.id,"Outage status updated",`Handler update: ${i.status}`,i.id));save(d);s.json({incident:i})}));
 app.post("/api/notifications/read",(q,s)=>auth(q,s,()=>{let d=db();d.notifications.filter(n=>n.userId===q.session.uid).forEach(n=>n.read=true);save(d);s.json({ok:true})}));
+app.get("/api/admin/detection", (q, s) => auth(q, s, async () => {
+    try {
+        const d = db();
+        const admin = current(d, q);
+
+        if (!admin || admin.role !== "admin") {
+            return s.status(403).json({error: "Admin access only."});
+        }
+
+        const residents = d.users.filter(u => u.role === "resident");
+        const residentsById = new Map(
+            residents.map(u => [u.id, u])
+        );
+
+        const activeIncidentIds = new Set(
+            d.incidents
+                .filter(i => !["restored", "closed"].includes(i.status))
+                .map(i => i.id)
+        );
+
+        const reports = d.reports
+            .filter(r =>
+                activeIncidentIds.has(r.incidentId) &&
+                r.affected === true &&
+                residentsById.has(r.userId)
+            )
+            .map(r => ({
+                userId: r.userId,
+                affected: true,
+                createdAt: r.respondedAt || r.createdAt,
+                location: r.location || null,
+                building_id: r.building_id ||
+                    buildingId(residentsById.get(r.userId))
+            }));
+
+        const result = await runDetector({
+            residents: residents.map(u => ({
+                id: u.id,
+                locality: u.locality
+            })),
+            reports
+        });
+
+        s.json(result);
+    } catch (error) {
+        console.error(error);
+        s.status(500).json({error: "Unable to run outage detection."});
+    }
+}));
 app.use(express.static(path.join(__dirname,"public")));app.get("*",(q,s)=>s.sendFile(path.join(__dirname,"public/index.html")));app.listen(PORT,()=>console.log("BijliMitra running at http://localhost:"+PORT));

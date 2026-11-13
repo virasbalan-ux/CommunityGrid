@@ -286,38 +286,39 @@ if __name__ == "__main__":
         print(f"[Cluster {a['cluster']}] {a['locality']}: {a['complaints']} complaints, "
               f"trust-weighted sum {a['weighted_sum']} vs minimum {a['n_min']} "
               f"-> confidence {a['confidence']} -> {status}")
-# Scope checks using simulated reports.
-same_building = [
-    Complaint("test1", 12.9716, 77.5946, 1, "Test Area", "building-a"),
-    Complaint("test2", 12.9716, 77.5946, 2, "Test Area", "building-a"),
-]
+if __name__ == "__main__":
+    # Scope checks using simulated reports.
+    same_building = [
+        Complaint("test1", 12.9716, 77.5946, 1, "Test Area", "building-a"),
+        Complaint("test2", 12.9716, 77.5946, 2, "Test Area", "building-a"),
+    ]
 
-different_buildings = [
-    same_building[0],
-    Complaint("test3", 12.9718, 77.5948, 2, "Test Area", "building-b"),
-]
+    different_buildings = [
+        same_building[0],
+        Complaint("test3", 12.9718, 77.5948, 2, "Test Area", "building-b"),
+    ]
 
-print("\nScope checks:")
-print("Same building:", assess_scope(same_building))
-print("Different buildings:", assess_scope(different_buildings))
-# Same locations, but reports arrive in two separate bursts.
-test_reports = []
+    print("\nScope checks:")
+    print("Same building:", assess_scope(same_building))
+    print("Different buildings:", assess_scope(different_buildings))
+    # Same locations, but reports arrive in two separate bursts.
+    test_reports = []
 
-for prefix, age in [("recent", 1), ("earlier", 25)]:
-    for i in range(5):
-        test_reports.append(
-            Complaint(
-                user_id=f"{prefix}_{i}",
-                lat=12.9716 + i * 0.00001,
-                lon=77.5946,
-                minutes_ago=age + i * 0.1,
-                locality="Test Area",
-                building_id=f"building-{i}",
+    for prefix, age in [("recent", 1), ("earlier", 25)]:
+        for i in range(5):
+            test_reports.append(
+                Complaint(
+                    user_id=f"{prefix}_{i}",
+                    lat=12.9716 + i * 0.00001,
+                    lon=77.5946,
+                    minutes_ago=age + i * 0.1,
+                    locality="Test Area",
+                    building_id=f"building-{i}",
+                )
             )
-        )
 
-test_labels = cluster_complaints(test_reports)
+    test_labels = cluster_complaints(test_reports)
 
-print("\nTime separation check:")
-print("Recent burst: ", test_labels[:5])
-print("Earlier burst:", test_labels[5:])
+    print("\nTime separation check:")
+    print("Recent burst: ", test_labels[:5])
+    print("Earlier burst:", test_labels[5:])
