@@ -1,0 +1,212 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BijliMitra</title><style>body{font:16px Arial;background:#f2f5f8;color:#183044;margin:0}header{background:#173b5e;color:white;padding:16px}main{max-width:900px;margin:20px auto;padding:0 14px}.card{background:white;border:1px solid #dce4eb;border-radius:10px;padding:18px;margin:12px 0}input,select,textarea,button{font:inherit;padding:10px;margin:5px 0;border:1px solid #bccbd6;border-radius:7px;box-sizing:border-box}input,select,textarea{width:100%}button{background:#1769aa;color:white;border:0;cursor:pointer}.secondary{background:#e8eef4;color:#173b5e}.hidden{display:none}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.item{border-top:1px solid #e1e6eb;padding:12px 0}.muted{color:#63717b;font-size:14px}.pill{background:#e6f1fa;padding:4px 8px;border-radius:18px}@media(max-width:600px){.grid{grid-template-columns:1fr}}</style></head><body><header><b>⚡ BijliMitra</b><span id="who" style="float:right"></span></header><main>
+<section id="auth"><div class="card"><h2>Login</h2><form id="login"><input name="username" placeholder="Username" required><input name="password" type="password" placeholder="Password" required><button>Login</button></form><p class="muted">Demo residents: asha / rahul / meera / dev — password demo123. Admin: admin / admin123</p><p id="err"></p></div><div class="card"><h2>Register resident</h2><form id="reg" class="grid"><div><input name="username" placeholder="Username" required><input name="password" type="password" placeholder="Password" required><input name="name" placeholder="Name" required><select name="housingType" id="type"><option value="apartment">Apartment</option><option value="independent">Independent house</option></select><input name="locality" placeholder="Locality" required><input name="street" placeholder="Street"></div><div id="apt"><input name="apartment" placeholder="Apartment name"><input name="block" placeholder="Block"><input name="flat" placeholder="Flat"></div><div id="house" class="hidden"><input name="houseNumber" placeholder="House number"><input name="landmark" placeholder="Landmark"></div><button>Create account</button></form></div></section>
+<section id="app" class="hidden"><nav><button class="secondary" onclick="go('home')">Dashboard</button><button class="secondary" onclick="go('history')">History</button><button class="secondary hidden" id="adminTab" onclick="go('admin')">Handler</button><button class="secondary" onclick="logout()">Logout</button></nav><div id="view"></div></section></main>
+<script>
+const $=s=>document.querySelector(s);let me=null,cache=null,tab="home";
+async function api(url,opt={}){let r=await fetch(url,{credentials:"same-origin",headers:{"Content-Type":"application/json"},...opt}),d=await r.json();if(!r.ok)throw Error(d.error||"Request failed");return d}
+const esc=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])),dt=x=>x?new Date(x).toLocaleString():"—",status=x=>String(x).replaceAll("_"," ");
+async function enter(u){me=u;$("#auth").classList.add("hidden");$("#app").classList.remove("hidden");$("#who").textContent=u.name+" · "+u.role;$("#adminTab").classList.toggle("hidden",u.role!=="admin");go("home")}
+async function load(){cache=await api("/api/dashboard")}
+async function go(p){tab=p;try{if(p==="admin"){await admin();return}await load();if(p==="home")home();else history()}catch(e){$("#view").textContent=e.message}}
+function home(){let d=cache;$("#view").innerHTML=`<div class="card"><h2>Dashboard</h2><p>Locality: ${esc(d.user.locality)}</p><button onclick="report()">Report power outage</button></div><div class="card"><h3>Active incidents</h3>${d.activeIncidents.map(i=>`<div class="item"><b>${esc(i.areaLabel)}</b> <span class="pill">${esc(status(i.status))}</span><p>${i.reportsCount} reports · ${i.confirmationCount} confirmations · ${dt(i.createdAt)}</p><button class="secondary" onclick="detail('${i.id}')">Open</button></div>`).join("")||"No active outages."}</div><div class="card"><h3>Planned outages for your locality</h3>${d.plannedOutages.map(p=>`<div class="item"><b>${esc(p.title)}</b><p>Starts: ${dt(p.startAt)} · Duration: ${p.durationHours} hour(s)</p><p>${esc(p.reason)} ${esc(p.details)}</p></div>`).join("")||"No planned outages."}</div><div class="card"><h3>Notifications</h3>${d.notifications.map(n=>`<div class="item"><b>${esc(n.title)}</b><p>${esc(n.message)}</p><small>${dt(n.createdAt)}</small></div>`).join("")||"No notifications."}<button class="secondary" onclick="api('/api/notifications/read',{method:'POST',body:'{}'}).then(()=>go('home'))">Mark read</button></div>`}
+function history(){let h=cache.history;$("#view").innerHTML=`<div class="card"><h2>Outage history</h2>${h.map(i=>`<div class="item"><b>${esc(i.areaLabel)}</b> · ${esc(status(i.status))}<p>Reported ${dt(i.createdAt)} · Restored ${dt(i.restoredAt)} · Complaint ${esc(i.complaintReference||"—")}</p></div>`).join("")||"No history."}</div>`}
+async function report() {
+    try {
+        let location = {};
+
+        const useLocation = confirm(
+            "Are you currently at the outage location? " +
+            "Click OK to share your current location, " +
+            "or Cancel to report without coordinates."
+        );
+
+        if (useLocation && navigator.geolocation) {
+            try {
+                const position = await new Promise((resolve, reject) => {
+                    navigator.geolocation.getCurrentPosition(
+                        resolve,
+                        reject,
+                        {
+                            enableHighAccuracy: true,
+                            timeout: 10000,
+                            maximumAge: 0
+                        }
+                    );
+                });
+
+                location = {
+                    lat: position.coords.latitude,
+                    lon: position.coords.longitude
+                };
+            } catch (error) {
+                alert(
+                    "Location unavailable. Your report will still be " +
+                    "submitted without coordinates."
+                );
+            }
+        } else if (useLocation) {
+            alert(
+                "Your browser does not support location access. " +
+                "Your report will be submitted without coordinates."
+            );
+        }
+
+        const r = await api("/api/incidents/report", {
+            method: "POST",
+            body: JSON.stringify(location)
+        });
+
+        alert(
+            r.joinedExisting
+                ? "Report joined existing incident."
+                : "Reported. Neighbours notified."
+        );
+
+        go("home");
+    } catch (error) {
+        alert(error.message);
+    }
+}
+async function detail(id){await load();let i=[...cache.activeIncidents,...cache.history].find(x=>x.id===id);if(!i)return;let original=cache.reports.some(r=>r.incidentId===id&&r.kind==="outage"&&r.userId===me.id),answered=cache.reports.some(r=>r.incidentId===id&&r.kind==="neighbor_response"&&r.userId===me.id);
+let canCheck=original&&i.status!=="community_confirmed"&&(i.homeCheckPrompted||cache.notifications.some(n=>n.incidentId===id&&n.title==="Neighbour response received"));
+$("#view").innerHTML=`<div class="card"><h2>${esc(i.areaLabel)}</h2><p>Status: ${esc(status(i.status))} · ${i.confirmationCount} neighbour confirmations</p><p>Reported ${dt(i.createdAt)}</p>${!original&&!answered&&me.role==="resident"?`<h3>Are you also affected?</h3><button onclick="respond('${id}',true)">Yes</button> <button class="secondary" onclick="respond('${id}',false)">No</button>`:""}${canCheck?`<h3>Home-level check</h3><form id="check"><label><input type="checkbox" name="nearbyOut" style="width:auto"> Nearby houses/streetlights also without power</label><label><input type="checkbox" name="breakerTripped" style="width:auto"> MCB/breaker appears tripped</label><label><input type="checkbox" name="hazard" style="width:auto"> Smoke, sparking, burning smell or exposed wiring</label><textarea name="notes" placeholder="Notes"></textarea><button>Submit home check</button></form><p class="muted">Do not touch wiring, electrical panels or exposed equipment. Keep away from hazards.</p><h3>Official complaint</h3><form id="complaint"><input name="provider" placeholder="Electricity provider"><input name="reference" placeholder="Complaint reference"><button>Save complaint details</button></form>`:""}<button class="secondary" onclick="restore('${id}')">Power restored at my home</button><button class="secondary" onclick="go('home')">Back</button></div>`;
+if($("#check"))$("#check").onsubmit=async e=>{e.preventDefault();let f=new FormData(e.target);try{let r=await api(`/api/incidents/${id}/home-check`,{method:"POST",body:JSON.stringify({nearbyOut:f.has("nearbyOut"),breakerTripped:f.has("breakerTripped"),hazard:f.has("hazard"),notes:f.get("notes")})});alert(r.message);go("home")}catch(x){alert(x.message)}};
+if($("#complaint"))$("#complaint").onsubmit=async e=>{e.preventDefault();try{await api(`/api/incidents/${id}/complaint`,{method:"POST",body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});alert("Complaint saved.");go("home")}catch(x){alert(x.message)}}
+}
+async function respond(id,affected){try{let r=await api(`/api/incidents/${id}/respond`,{method:"POST",body:JSON.stringify({affected})});alert(affected?"Response saved. The original reporter will be told a neighbour is also affected.":"Response saved. The original reporter will be prompted to check their home.");go("home")}catch(e){alert(e.message)}}
+async function restore(id){try{await api(`/api/incidents/${id}/restore`,{method:"POST",body:"{}"});alert("Restoration response saved.");go("home")}catch(e){alert(e.message)}}
+async function runOutageAnalysis() {
+    const button = $("#runDetection");
+    const results = $("#detectionResults");
+
+    button.disabled = true;
+    results.textContent = "Analysing reports…";
+
+    try {
+        const d = await api("/api/admin/detection");
+
+        results.innerHTML = `
+            <p>
+                Reports with usable coordinates: ${esc(String(d.converted_reports))}
+                · Skipped: ${esc(String(d.skipped_reports))}
+                · Unclustered recent reports: ${esc(String(d.noise_reports))}
+            </p>
+            <p class="muted">${esc(d.trust_mode)}</p>
+            <p class="muted">
+                Evidence scores are experimental, not outage probabilities.
+                Locality false-report history is not yet available.
+            </p>
+            ${d.alerts.map(a => `
+                <div class="item">
+                    <b>${esc(a.locality)}</b>
+                    <p>${esc(a.scope)}</p>
+                    <p>
+                        ${esc(String(a.complaints))} reports
+                        · Evidence score: ${esc(String(a.evidence_score))}
+                    </p>
+                    <p>
+                        ${a.review_required
+                            ? "Evidence threshold passed — review home, building and wider supply."
+                            : "Below evidence threshold — more evidence needed."}
+                    </p>
+                </div>
+            `).join("") || "<p>No outage clusters detected.</p>"}
+        `;
+    } catch (error) {
+        results.textContent = error.message;
+    } finally {
+        button.disabled = false;
+    }
+}
+async function saveReportReview(reportId) {
+    const outcome = document.getElementById(
+        "reviewOutcome" + reportId
+    ).value;
+
+    const evidence = document.getElementById(
+        "reviewEvidence" + reportId
+    ).value.trim();
+
+    if (outcome !== "unreviewed" && !evidence) {
+        alert("Enter the evidence supporting this review.");
+        return;
+    }
+
+    try {
+        await api(
+            "/api/admin/reports/" + encodeURIComponent(reportId) + "/review",
+            {
+                method: "POST",
+                body: JSON.stringify({ outcome, evidence })
+            }
+        );
+
+        alert("Review saved.");
+        await admin();
+    } catch (error) {
+        alert(error.message);
+    }
+}
+async function admin(){let d=await api("/api/admin/overview");$("#view").innerHTML=`<div class="card"><h2>Handler dashboard</h2><h3>Publish planned outage notification</h3><form id="planned" class="grid"><input name="locality" placeholder="Exact locality name" required><input name="title" placeholder="Notice title" value="Planned power outage"><label>Start date/time<input type="datetime-local" name="startAt" required></label><label>Duration in hours<input type="number" name="durationHours" min="0.5" step="0.5" required></label><input name="reason" placeholder="Reason / maintenance"><textarea name="details" placeholder="Additional details"></textarea><button>Notify locality residents</button></form><p class="muted">Sends in-app notifications to registered residents whose locality matches exactly.</p><h3>Outage analysis</h3>
+<p class="muted">
+    Groups reports by distance and time. Results require handler review
+    and do not establish the cause of an outage.
+</p>
+<button id="runDetection" onclick="runOutageAnalysis()">
+    Run outage analysis
+</button>
+<div id="detectionResults"></div><h3>Review individual reports</h3>
+<p class="muted">
+    Confirm whether the resident experienced an outage, including a
+    home or building outage. Mark false only with supporting evidence.
+    Missing neighbour confirmation is not evidence of a false report.
+</p>
+
+${(d.reports || []).map(r => `
+    <div class="item">
+        <b>${esc(r.residentName)}</b> · ${esc(r.locality)}
+        <p>
+            Reported: ${esc(r.createdAt)}
+            · Review: ${esc(r.outcome)}
+        </p>
+        <p>
+            History: ${esc(String(r.history.confirmed))} confirmed,
+            ${esc(String(r.history.false))} false
+        </p>
+
+        <select id="reviewOutcome${esc(r.id)}">
+            <option value="unreviewed"
+                ${r.outcome === "unreviewed" ? "selected" : ""}>
+                Unreviewed
+            </option>
+            <option value="confirmed"
+                ${r.outcome === "confirmed" ? "selected" : ""}>
+                Confirmed outage experience
+            </option>
+            <option value="false"
+                ${r.outcome === "false" ? "selected" : ""}>
+                False report established
+            </option>
+        </select>
+
+        <textarea
+            id="reviewEvidence${esc(r.id)}"
+            placeholder="Evidence supporting your review"
+        >${esc(r.evidence)}</textarea>
+
+        <button
+            data-report-id="${esc(r.id)}"
+            onclick="saveReportReview(this.dataset.reportId)">
+            Save review
+        </button>
+    </div>
+`).join("") || "<p>No positive outage reports to review.</p>"}<h3>Reported incidents</h3>${d.incidents.map(i=>`<div class="item"><b>${esc(i.areaLabel)}</b> · ${esc(status(i.status))}<p>${i.reportsCount} reports / ${i.confirmationCount} confirmations</p><input id="provider${i.id}" placeholder="Provider"><input id="ref${i.id}" placeholder="Official complaint reference"><button onclick="adminComplaint('${i.id}')">Save complaint</button><select id="status${i.id}"><option value="reported">Reported</option><option value="community_confirmed">Community confirmed</option><option value="complaint_lodged">Complaint lodged</option><option value="restored">Restored</option><option value="closed">Closed</option></select><button class="secondary" onclick="adminStatus('${i.id}')">Update status</button></div>`).join("")||"No incidents yet."}</div>`;
+$("#planned").onsubmit=async e=>{e.preventDefault();try{let r=await api("/api/admin/planned-outages",{method:"POST",body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});alert(`Notification sent to ${r.notifiedResidents} resident(s).`);admin()}catch(x){alert(x.message)}}}
+async function adminComplaint(id){try{await api(`/api/incidents/${id}/complaint`,{method:"POST",body:JSON.stringify({provider:$("#provider"+id).value,reference:$("#ref"+id).value})});alert("Saved.");admin()}catch(e){alert(e.message)}}
+async function adminStatus(id){try{await api(`/api/admin/incidents/${id}/status`,{method:"POST",body:JSON.stringify({status:$("#status"+id).value})});alert("Updated.");admin()}catch(e){alert(e.message)}}
+$("#login").onsubmit=async e=>{e.preventDefault();try{let r=await api("/api/login",{method:"POST",body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});$("#err").textContent="";enter(r.user)}catch(x){$("#err").textContent=x.message}};
+$("#reg").onsubmit=async e=>{e.preventDefault();try{let r=await api("/api/register",{method:"POST",body:JSON.stringify(Object.fromEntries(new FormData(e.target)))});enter(r.user)}catch(x){$("#err").textContent=x.message}};
+$("#type").onchange=e=>{$("#apt").classList.toggle("hidden",e.target.value!=="apartment");$("#house").classList.toggle("hidden",e.target.value!=="independent")};
+async function logout(){await api("/api/logout",{method:"POST"});location.reload()}
+(async()=>{try{let r=await api("/api/me");enter(r.user)}catch{}})();setInterval(()=>{if(me&&tab==="home")go("home")},8000);
+</script></body></html>

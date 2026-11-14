@@ -19,6 +19,8 @@ from sklearn.cluster import HDBSCAN
 # CONFIG (all tunable, mention these as "hyperparameters" when explaining)
 # ----------------------------------------------------------------------
 WINDOW_MIN = 30            # only complaints from the last 30 minutes count
+SPATIAL_SCALE_M = 300       # distance scale: 300 metres
+TEMPORAL_SCALE_MIN = 10     # time scale: 10 minutes
 P_REPORT = 0.05            # expected fraction of app users who report a real outage
 MIN_FLOOR = 3              # one or two people can never trigger an alert
 CONF_CUTOFF = 0.80         # notify only if confidence >= this
@@ -43,6 +45,7 @@ class Complaint:
     lon: float
     minutes_ago: float
     locality: str
+    building_id: str | None = None
 
 
 @dataclass
@@ -101,29 +104,76 @@ def confidence(weighted_sum: float, n_min: float) -> float:
 # PART C: HDBSCAN (the "where" step)
 # ----------------------------------------------------------------------
 def cluster_complaints(complaints: list[Complaint]) -> np.ndarray:
-    """
-    Cluster complaints by geographic location.
-      - Input: (lat, lon) in RADIANS, because the haversine metric measures distance on a sphere.
-      - min_cluster_size=3: smallest group we'd ever call a cluster (the weighted threshold
-        decides whether it is actually big/trustworthy enough).
-      - Output: label per complaint; -1 means noise (isolated complaint, ignored).
-    """
+    """Group reports using geographic distance and time separation."""
     if len(complaints) < 3:
-        return np.full(len(complaints), -1)
+        return np.full(len(complaints), -1, dtype=int)
+
+    # Convert latitude and longitude from degrees to radians.
     coords = np.radians([[c.lat, c.lon] for c in complaints])
+    lat = coords[:, 0]
+    lon = coords[:, 1]
+
+    # Calculate the geographic distance between every pair of reports.
+    dlat = lat[:, None] - lat[None, :]
+    dlon = lon[:, None] - lon[None, :]
+
+    a = (
+        np.sin(dlat / 2) ** 2
+        + np.cos(lat[:, None])
+        * np.cos(lat[None, :])
+        * np.sin(dlon / 2) ** 2
+    )
+
+    distance_m = (
+        2 * EARTH_RADIUS_M
+        * np.arcsin(np.sqrt(np.clip(a, 0, 1)))
+    )
+
+    # Calculate the time difference between every pair of reports.
+    ages = np.array([c.minutes_ago for c in complaints])
+    time_gap_min = np.abs(ages[:, None] - ages[None, :])
+
+    # A pair is close only when BOTH distance and time are small.
+    separation = np.maximum(
+        distance_m / SPATIAL_SCALE_M,
+        time_gap_min / TEMPORAL_SCALE_MIN,
+    )
+    np.fill_diagonal(separation, 0.0)
+
     model = HDBSCAN(
         min_cluster_size=3,
         min_samples=2,
+        metric="precomputed",
+        cluster_selection_epsilon=0.0,
+        allow_single_cluster=True,
         copy=True,
-        metric="haversine",
-        cluster_selection_epsilon=CLUSTER_EPS_M / EARTH_RADIUS_M,  # haversine works in radians
     )
-    return model.fit_predict(coords)
+
+    return model.fit_predict(separation)
 
 
 # ----------------------------------------------------------------------
 # MAIN DETECTION PIPELINE
 # ----------------------------------------------------------------------
+def assess_scope(members):
+    building_ids = {
+        c.building_id
+        for c in members
+        if c.building_id
+    }
+    unknown_count = sum(
+        1 for c in members if not c.building_id
+    )
+
+    if not building_ids:
+        return "unknown — building information needed"
+
+    if len(building_ids) == 1:
+        if unknown_count:
+            return "uncertain — one known building, other locations unknown"
+        return "single building — check internal and utility supply"
+
+    return "multiple buildings — wider outage suspected, review required"
 def detect_outages(complaints, users, localities):
     # 1) Rolling window: real outages produce a burst, not a trickle
     recent = [c for c in complaints if c.minutes_ago <= WINDOW_MIN]
@@ -156,6 +206,7 @@ def detect_outages(complaints, users, localities):
         alerts.append({
             "cluster": int(label),
             "locality": loc_name,
+            "scope": assess_scope(members),
             "complaints": len(members),
             "weighted_sum": round(S, 2),
             "n_min": round(n_min, 2),
@@ -228,7 +279,48 @@ if __name__ == "__main__":
 
     print(f"Total complaints: {len(complaints)} | ignored as isolated noise: {noise}\n")
     for a in alerts:
-        status = "NOTIFY DEPT" if a["notify"] else "hold (not enough evidence)"
+        print(f"\nScope: {a['scope']}")
+        status = (
+           "REVIEW REQUIRED (check home/building/wider outage)"
+            if a["notify"]
+            else "hold (not enough evidence)"
+        )
         print(f"[Cluster {a['cluster']}] {a['locality']}: {a['complaints']} complaints, "
               f"trust-weighted sum {a['weighted_sum']} vs minimum {a['n_min']} "
               f"-> confidence {a['confidence']} -> {status}")
+if __name__ == "__main__":
+    # Scope checks using simulated reports.
+    same_building = [
+        Complaint("test1", 12.9716, 77.5946, 1, "Test Area", "building-a"),
+        Complaint("test2", 12.9716, 77.5946, 2, "Test Area", "building-a"),
+    ]
+
+    different_buildings = [
+        same_building[0],
+        Complaint("test3", 12.9718, 77.5948, 2, "Test Area", "building-b"),
+    ]
+
+    print("\nScope checks:")
+    print("Same building:", assess_scope(same_building))
+    print("Different buildings:", assess_scope(different_buildings))
+    # Same locations, but reports arrive in two separate bursts.
+    test_reports = []
+
+    for prefix, age in [("recent", 1), ("earlier", 25)]:
+        for i in range(5):
+            test_reports.append(
+                Complaint(
+                    user_id=f"{prefix}_{i}",
+                    lat=12.9716 + i * 0.00001,
+                    lon=77.5946,
+                    minutes_ago=age + i * 0.1,
+                    locality="Test Area",
+                    building_id=f"building-{i}",
+                )
+            )
+
+    test_labels = cluster_complaints(test_reports)
+
+    print("\nTime separation check:")
+    print("Recent burst: ", test_labels[:5])
+    print("Earlier burst:", test_labels[5:])
